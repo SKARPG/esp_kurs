@@ -2,7 +2,9 @@
 #include "TCP_wifi_client.h"
 
 static const char* TAG = "TCP wifi client";
-static const char* payload = "Message from ESP32 ";
+
+static QueueHandle_t rx_queue = NULL;
+static QueueHandle_t tx_queue = NULL;
 
 
 /**
@@ -113,6 +115,89 @@ static void wifi_init_sta(TCP_wifi_conf_t tcp_conf)
 
 
 /**
+ * @brief TCP wifi client task
+ * 
+ * @param pvParameters task parameters
+*/
+static void TCP_client_task(void* pvParameters)
+{
+    TCP_wifi_conf_t* tcp_conf = (TCP_wifi_conf_t*)pvParameters;
+
+    char tx_buffer[BUF_SIZE];
+    char rx_buffer[BUF_SIZE];
+    char host_ip[BUF_SIZE];
+    int addr_family = 0;
+    int ip_protocol = 0;
+
+    strcpy(host_ip, tcp_conf->host_ip);
+
+    while (1)
+    {
+        struct sockaddr_in dest_addr;
+        inet_pton(AF_INET, host_ip, &dest_addr.sin_addr);
+        dest_addr.sin_family = AF_INET;
+        dest_addr.sin_port = htons(tcp_conf->port);
+        addr_family = AF_INET;
+        ip_protocol = IPPROTO_IP;
+
+        int sock =  socket(addr_family, SOCK_STREAM, ip_protocol);
+        if (sock < 0)
+        {
+            ESP_LOGE(TAG, "Unable to create socket: errno %d", errno);
+            break;
+        }
+        ESP_LOGI(TAG, "Socket created, connecting to %s:%lu", host_ip, tcp_conf->port);
+
+        int err = connect(sock, (struct sockaddr*)&dest_addr, sizeof(dest_addr));
+        if (err != 0)
+        {
+            ESP_LOGE(TAG, "Socket unable to connect: errno %d", errno);
+            break;
+        }
+        ESP_LOGI(TAG, "Successfully connected");
+
+        while (1)
+        {
+            if (xQueueReceive(tx_queue, tx_buffer, 0) == pdTRUE)
+            {
+                int err = send(sock, tx_buffer, strlen(tx_buffer), 0);
+                if (err < 0)
+                {
+                    ESP_LOGE(TAG, "Error occurred during sending: errno %d", errno);
+                    break;
+                }
+            }
+
+            int len = recv(sock, rx_buffer, sizeof(rx_buffer) - 1, 0);
+            // Error occurred during receiving
+            if (len < 0)
+            {
+                ESP_LOGE(TAG, "recv failed: errno %d", errno);
+                break;
+            }
+            // Data received
+            else
+            {
+                if (xQueueSend(rx_queue, rx_buffer, 0) != pdTRUE)
+                    ESP_LOGE(TAG, "Error sending data to rx_queue");
+
+                rx_buffer[len] = 0; // Null-terminate whatever we received and treat like a string
+                ESP_LOGI(TAG, "Received %d bytes from %s", len, host_ip);
+                ESP_LOGI(TAG, "%s", rx_buffer);
+            }
+        }
+
+        if (sock != -1) 
+        {
+            ESP_LOGE(TAG, "Shutting down socket and restarting...");
+            shutdown(sock, 0);
+            close(sock);
+        }
+    }
+}
+
+
+/**
  * @brief TCP wifi client initialization
  * 
  * @param tcp_conf TCP wifi client configuration struct
@@ -130,68 +215,38 @@ void TCP_wifi_init(TCP_wifi_conf_t tcp_conf)
     // connect to wifi
     wifi_init_sta(tcp_conf);
 
-    char rx_buffer[128];
-    char host_ip[] = "192.168.1.140";
-    int addr_family = 0;
-    int ip_protocol = 0;
+    rx_queue = xQueueCreate(QUEUE_SIZE, sizeof(char)*BUF_SIZE);
+    if (rx_queue == NULL)
+        ESP_LOGE(TAG, "Error creating rx_queue");
 
-    // memcpy(&tcp_conf, tcp_conf.host_ip, sizeof(tcp_conf.host_ip)*sizeof(char));
+    tx_queue = xQueueCreate(QUEUE_SIZE, sizeof(char)*BUF_SIZE);
+    if (tx_queue == NULL)
+        ESP_LOGE(TAG, "Error creating tx_queue");
 
-    while (1)
-    {
-        struct sockaddr_in dest_addr;
-        inet_pton(AF_INET, host_ip, &dest_addr.sin_addr);
-        dest_addr.sin_family = AF_INET;
-        dest_addr.sin_port = htons(tcp_conf.port);
-        addr_family = AF_INET;
-        ip_protocol = IPPROTO_IP;
+    // create TCP client task
+    xTaskCreate(TCP_client_task, "TCP_client_task", 4096, (void*)&tcp_conf, 3, NULL);
+}
 
-        int sock =  socket(addr_family, SOCK_STREAM, ip_protocol);
-        if (sock < 0)
-        {
-            ESP_LOGE(TAG, "Unable to create socket: errno %d", errno);
-            break;
-        }
-        ESP_LOGI(TAG, "Socket created, connecting to %s:%lu", host_ip, tcp_conf.port);
 
-        int err = connect(sock, (struct sockaddr*)&dest_addr, sizeof(dest_addr));
-        if (err != 0)
-        {
-            ESP_LOGE(TAG, "Socket unable to connect: errno %d", errno);
-            break;
-        }
-        ESP_LOGI(TAG, "Successfully connected");
+/**
+ * @brief send data to TCP server
+ * 
+ * @param data data to send
+*/
+void TCP_wifi_send(char* data)
+{
+    if (xQueueSend(tx_queue, data, portMAX_DELAY) != pdTRUE)
+        ESP_LOGE(TAG, "Error sending data to tx_queue");
+}
 
-        while (1)
-        {
-            int err = send(sock, payload, strlen(payload), 0);
-            if (err < 0)
-            {
-                ESP_LOGE(TAG, "Error occurred during sending: errno %d", errno);
-                break;
-            }
 
-            int len = recv(sock, rx_buffer, sizeof(rx_buffer) - 1, 0);
-            // Error occurred during receiving
-            if (len < 0)
-            {
-                ESP_LOGE(TAG, "recv failed: errno %d", errno);
-                break;
-            }
-            // Data received
-            else
-            {
-                rx_buffer[len] = 0; // Null-terminate whatever we received and treat like a string
-                ESP_LOGI(TAG, "Received %d bytes from %s:", len, host_ip);
-                ESP_LOGI(TAG, "%s", rx_buffer);
-            }
-        }
-
-        if (sock != -1) 
-        {
-            ESP_LOGE(TAG, "Shutting down socket and restarting...");
-            shutdown(sock, 0);
-            close(sock);
-        }
-    }
+/**
+ * @brief receive data from TCP server
+ * 
+ * @param data received data
+*/
+void TCP_wifi_receive(char* data)
+{
+    if (xQueueReceive(rx_queue, data, portMAX_DELAY) != pdTRUE)
+        ESP_LOGE(TAG, "Error receiving data from rx_queue");
 }

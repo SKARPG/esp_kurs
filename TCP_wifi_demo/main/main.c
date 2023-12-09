@@ -1,10 +1,10 @@
 #include <stdio.h>
 #include "TCP_wifi_client.h"
 
-#define WIFI_SSID "AWG_Cisco"
-#define WIFI_PASS "1q2w3e4r5t6y7u8i9o0"
-#define WIFI_HOST_IP "192.168.1.140"
-#define WIFI_PORT 3333
+#define WIFI_SSID       "piwo"
+#define WIFI_PASS       "stary_pijany"
+#define WIFI_HOST_IP    "192.168.0.84"
+#define WIFI_PORT       23
 
 
 void app_main(void)
@@ -17,4 +17,16 @@ void app_main(void)
     };
 
     TCP_wifi_init(tcp_conf);
+
+    char data[128];
+
+    while (1)
+    {
+        TCP_wifi_send("Hello World!");
+        TCP_wifi_receive(data);
+
+        vTaskDelay(1000 / portTICK_PERIOD_MS);
+
+        // puts(data);
+    }
 }

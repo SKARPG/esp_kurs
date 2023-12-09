@@ -2,6 +2,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/event_groups.h"
+#include "freertos/queue.h"
 #include "nvs_flash.h"
 #include "esp_netif.h"
 #include "esp_event.h"
@@ -23,6 +24,9 @@
 #define WIFI_FAIL_BIT      BIT1
 
 #define MAX_RETRY          10
+#define BUF_SIZE           128
+#define QUEUE_SIZE         100
+#define QUEUE_TIMEOUT      (100 / portTICK_PERIOD_MS)
 
 typedef struct TCP_wifi_conf_t
 {
@@ -40,3 +44,7 @@ typedef struct wifi_event_arg_t
 
 
 void TCP_wifi_init(TCP_wifi_conf_t tcp_conf);
+
+void TCP_wifi_send(char* data);
+
+void TCP_wifi_receive(char* data);
